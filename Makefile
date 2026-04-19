@@ -35,7 +35,7 @@ $(BUILD)/%.o: %.cpp
 	$(CXX) $(CXXFLAGS) -MMD -MP -c $< -o $@
 
 clean:
-	$(RM) $(BUILD)
+	rm -rf build
 
 print:
 	@echo "SRCS=$(SRCS)"

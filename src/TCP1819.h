@@ -108,18 +108,18 @@ enum {
 typedef struct mybbi2c
 {
 unsigned char iSDA, iSCL; // pin numbers (0xff = disabled)
-unsigned char bWire, bAlign; // use the Wire library
+unsigned char bWire, bAlign; // bWire ignored; bit-bang only
 unsigned char iSDABit, iSCLBit; // bit numbers of the ports
-unsigned int iDelay;
+uint32_t iDelay;
 #ifdef _LINUX_
 int file_i2c;
 int iBus;
 #else
 #ifdef ARDUINO
 #ifdef DARDUINO_ARCH_MBED 
-MbedI2C *pWire;
+
 #else
-TwoWire *pWire = &Wire;
+
 #endif // MBED
 volatile uint32_t *pSDADDR, *pSDAPORT; // data direction and port register addr
 volatile uint32_t *pSCLDDR, *pSCLPORT;
@@ -157,7 +157,7 @@ void I2CScan(BBI2C *pI2C, unsigned char *pMap);
 // Pass the pin numbers used for SDA and SCL
 // as well as the clock rate in Hz
 //
-void I2CInit(BBI2C *pI2C, unsigned int iClock);
+void I2CInit(BBI2C *pI2C, uint32_t iClock);
 //
 // Figure out what device is at that address
 // returns the enumerated value

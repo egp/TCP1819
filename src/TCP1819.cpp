@@ -48,7 +48,6 @@ static unsigned char iSDAState = 1;
 #include <Arduino.h>
 
 #ifndef __AVR_ATtiny85__
-#include <Wire.h>
 #endif // !AVR
 #ifdef W600_EV
 #include <W600FastIO.h>
@@ -56,9 +55,11 @@ static unsigned char iSDAState = 1;
 #endif // W600_EV
 #else // !ARDUINO
 // ESP-IDF
+#if defined(ESP_PLATFORM)
 #include "rom/ets_sys.h"
 #include "driver/i2c.h"
 #include "driver/gpio.h"
+#endif
 #define I2C_MASTER_NUM              0
 #define INPUT 0
 #define OUTPUT 1
@@ -70,6 +71,7 @@ static unsigned char iSDAState = 1;
 
 void pinMode(int iPin, int iMode)
 {
+  #if defined(ESP_PLATFORM)
     gpio_config_t io_conf = {};
 
     gpio_reset_pin((gpio_num_t)iPin);
@@ -85,11 +87,16 @@ void pinMode(int iPin, int iMode)
         io_conf.mode = GPIO_MODE_INPUT;
     }
     gpio_config(&io_conf); //configure GPIO with the given settings
+    #endif
 } /* pinMode() */
 
 void IRAM_ATTR delayMicroseconds(uint32_t us)
 {
+
+#if defined(ARDUINO_ARCH_ESP32)
     ets_delay_us(us);
+#endif
+
 }
 
 void digitalWrite(int iPin, int iValue)
@@ -612,9 +619,10 @@ void I2CGetDeviceName(int iDevice, char *szName)
 // Pass the pin numbers used for SDA and SCL
 // as well as the clock rate in Hz
 //
-void I2CInit(BBI2C *pI2C, unsigned int iClock)
+void I2CInit(BBI2C *pI2C, uint32_t iClock);
 {
-#if !defined( _LINUX_ ) && !defined( ARDUINO )
+#if defined(ESP_PLATFORM)
+
     // ESP-IDF
     i2c_config_t conf;
     conf.mode = I2C_MODE_MASTER;
@@ -628,126 +636,87 @@ void I2CInit(BBI2C *pI2C, unsigned int iClock)
     ESP_ERROR_CHECK(i2c_driver_install(I2C_NUM_0, I2C_MODE_MASTER, 0, 0, 0));
     return;
 #endif // !_LINUX_ && !ARDUINO
-#ifdef _LINUX_
-   if (gpioInitialise() < 0)
-   {
-      printf("pigpio failed to initialize\n");
-      return;
-   }
-#endif
-   if (pI2C == NULL) return;
 
-   if (pI2C->bWire) // use Wire library
-   {
-#if defined (ARDUINO) && !defined( _LINUX_ ) && !defined( __AVR_ATtiny85__ )
-#if defined(NRF51) || defined(TEENSYDUINO) || defined(ARDUINO_ARCH_MBED) || defined( __AVR__ ) || defined( NRF52 ) || defined ( ARDUINO_ARCH_NRF52840 ) || defined(ARDUINO_ARCH_NRF52) || defined(ARDUINO_ARCH_SAM)
-#ifdef ARDUINO_ARCH_MBED 
- // Mbed Cortex-M MCUs can set I2C on custom pins
-       if (pI2C->iSDA == 0xff || pI2C->iSDA == I2C_SDA) {
-           pI2C->pWire = &Wire;
-#ifdef I2C_SDA1
-       } else if (pI2C->iSDA == I2C_SDA1) {
-           pI2C->pWire = &Wire1;
-#endif
-       } else {
-           pI2C->pWire = new MbedI2C((int)pI2C->iSDA, (int)pI2C->iSCL);
-       }
-#endif
-       pI2C->pWire->begin();
-#else
-       if (pI2C->iSDA == 0xff || pI2C->iSCL == 0xff) {
-           pI2C->pWire->begin();
-       } else {
-#if defined( ARDUINO_RASPBERRY_PI_PICO ) || defined( ARDUINO_ARCH_RP2040 )
-           pI2C->pWire->setSDA((pin_size_t)pI2C->iSDA);
-           pI2C->pWire->setSCL((pin_size_t)pI2C->iSCL);
-           pI2C->pWire->begin();
-#else
-#ifdef ARDUINO_ARCH_RENESAS
-           pI2C->pWire = new TwoWire((int)pI2C->iSDA, (int)pI2C->iSCL);
-           pI2C->pWire->begin();
-#else
-           pI2C->pWire->begin((int)pI2C->iSDA, (int)pI2C->iSCL);
-#endif
-#endif
-       }
-#endif
-       pI2C->pWire->setClock(iClock);
-//       pI2C->pWire->setTimeout(20000L); // set a timeout of 20ms
-#endif
 #ifdef _LINUX_
-       {
-           char filename[32];
-           sprintf(filename, "/dev/i2c-%d", pI2C->iBus);
-           if ((pI2C->file_i2c = open(filename, O_RDWR)) < 0)
-                 return;
-       }
-#endif // _LINUX_
-       return;
-   }
-   if (pI2C->iSDA < 0xa0)
-   {
-#if !defined ( __AVR_ATtiny85__ ) && !defined( _LINUX_ )
+    if (gpioInitialise() < 0)
+    {
+        printf("pigpio failed to initialize\n");
+        return;
+    }
+#endif
+
+    if (pI2C == NULL) return;
+    if (iClock == 0) iClock = 100000UL;
+
+    if (pI2C->iSDA < 0xa0)
+    {
+#if !defined(__AVR_ATtiny85__) && !defined(_LINUX_)
 #ifdef W600_EV
-     w600PinMode(pI2C->iSDA, GPIO_OUTPUT);
-     w600PinMode(pI2C->iSCL, GPIO_OUTPUT);
-     w600DigitalWrite(pI2C->iSDA, LOW); // setting low = enabling as outputs
-     w600DigitalWrite(pI2C->iSCL, LOW);
-     w600PinMode(pI2C->iSDA, GPIO_INPUT); // let the lines float (tri-state)
-     w600PinMode(pI2C->iSCL, GPIO_INPUT);
+        w600PinMode(pI2C->iSDA, GPIO_OUTPUT);
+        w600PinMode(pI2C->iSCL, GPIO_OUTPUT);
+        w600DigitalWrite(pI2C->iSDA, LOW); // setting low = enabling as outputs
+        w600DigitalWrite(pI2C->iSCL, LOW);
+        w600PinMode(pI2C->iSDA, GPIO_INPUT); // let the lines float (tri-state)
+        w600PinMode(pI2C->iSCL, GPIO_INPUT);
 #else // generic
-     pinMode(pI2C->iSDA, OUTPUT);
-     pinMode(pI2C->iSCL, OUTPUT);
-     digitalWrite(pI2C->iSDA, LOW); // setting low = enabling as outputs
-     digitalWrite(pI2C->iSCL, LOW);
-     pinMode(pI2C->iSDA, INPUT); // let the lines float (tri-state)
-     pinMode(pI2C->iSCL, INPUT);
+        pinMode(pI2C->iSDA, OUTPUT);
+        pinMode(pI2C->iSCL, OUTPUT);
+        digitalWrite(pI2C->iSDA, LOW); // setting low = enabling as outputs
+        digitalWrite(pI2C->iSCL, LOW);
+        pinMode(pI2C->iSDA, INPUT); // let the lines float (tri-state)
+        pinMode(pI2C->iSCL, INPUT);
 #endif
 #endif
+
 #ifdef _LINUX_
-     // use PIGPIO
-     // convert pin numbers to BCM numbers for PIGPIO
-     pI2C->iSDA = iRPIPins[pI2C->iSDA];
-     pI2C->iSCL = iRPIPins[pI2C->iSCL];
-     gpioWrite(pI2C->iSDA, 0);
-     gpioWrite(pI2C->iSCL, 0);
-     gpioSetMode(pI2C->iSDA, PI_INPUT);
-//     gpioSetPullUpDown(pI2C->iSDA, PI_PUD_UP);
-     gpioSetMode(pI2C->iSCL, PI_INPUT);
-//     gpioSetPullUpDown(pI2C->iSCL, PI_PUD_UP);
+        // use PIGPIO
+        // convert pin numbers to BCM numbers for PIGPIO
+        pI2C->iSDA = iRPIPins[pI2C->iSDA];
+        pI2C->iSCL = iRPIPins[pI2C->iSCL];
+        gpioWrite(pI2C->iSDA, 0);
+        gpioWrite(pI2C->iSCL, 0);
+        gpioSetMode(pI2C->iSDA, PI_INPUT);
+        // gpioSetPullUpDown(pI2C->iSDA, PI_PUD_UP);
+        gpioSetMode(pI2C->iSCL, PI_INPUT);
+        // gpioSetPullUpDown(pI2C->iSCL, PI_PUD_UP);
 #endif // _LINUX_
-   }
-#if defined ( __AVR__ ) && !defined( ARDUINO_ARCH_MEGAAVR )
-   else // direct pin mode, get port address and bit
-   {
-//      iSDABit = 1 << (pI2C->iSDA & 0x7);
-      iSDABit = 1 << getPinInfo(pI2C->iSDA, &iDDR_SDA, &iPort_SDA_Out, 0);
-      getPinInfo(pI2C->iSDA, &iDDR_SDA, &iPort_SDA_In, 1);
-//      iSCLBit = 1 << (pI2C->iSCL & 0x7);
-      iSCLBit = 1 << getPinInfo(pI2C->iSCL, &iDDR_SCL, &iPort_SCL_Out, 0);
-      *iDDR_SDA &= ~iSDABit; // pinMode input
-      *iDDR_SCL &= ~iSCLBit; // pinMode input
-      *iPort_SDA_Out &= ~iSDABit; // digitalWrite SDA LOW
-      *iPort_SCL_Out &= ~iSCLBit; // digitalWrite SCL LOW
-   }
+    }
+
+#if defined(__AVR__) && !defined(ARDUINO_ARCH_MEGAAVR)
+    else // direct pin mode, get port address and bit
+    {
+        iSDABit = 1 << getPinInfo(pI2C->iSDA, &iDDR_SDA, &iPort_SDA_Out, 0);
+        getPinInfo(pI2C->iSDA, &iDDR_SDA, &iPort_SDA_In, 1);
+        iSCLBit = 1 << getPinInfo(pI2C->iSCL, &iDDR_SCL, &iPort_SCL_Out, 0);
+        *iDDR_SDA &= ~iSDABit;      // pinMode input
+        *iDDR_SCL &= ~iSCLBit;      // pinMode input
+        *iPort_SDA_Out &= ~iSDABit; // digitalWrite SDA LOW
+        *iPort_SCL_Out &= ~iSCLBit; // digitalWrite SCL LOW
+    }
 #endif // __AVR__
-  // For now, we only support 100, 400 or 800K clock rates
-  // all other values default to 100K
+
+    // For now, we only support 100K, 400K, 800K and 1MHz clock rates
+    // all other values default to a computed delay
 #ifdef _LINUX_
-   pI2C->iDelay = 1000000 / iClock;
-   if (pI2C->iDelay < 1) pI2C->iDelay = 1;
+    {
+        uint32_t delay = 1000000UL / iClock;
+        if (delay < 1UL) delay = 1UL;
+        pI2C->iDelay = (uint16_t)delay;
+    }
 #else
-   if (iClock >= 1000000)
-      pI2C->iDelay = 0; // the code execution is enough delay
-   else if (iClock >= 800000)
-      pI2C->iDelay = 1;
-   else if (iClock >= 400000)
-      pI2C->iDelay = 2;
-   else if (iClock >= 100000)
-      pI2C->iDelay = 10;
-   else pI2C->iDelay = (uint16_t)(1000000 / iClock);
+    if (iClock >= 1000000UL)
+        pI2C->iDelay = 0;  // code execution time is enough delay
+    else if (iClock >= 800000UL)
+        pI2C->iDelay = 1;
+    else if (iClock >= 400000UL)
+        pI2C->iDelay = 2;
+    else if (iClock >= 100000UL)
+        pI2C->iDelay = 10;
+    else
+        pI2C->iDelay = (uint16_t)(1000000UL / iClock);
 #endif // _LINUX_
-} /* i2cInit() */
+} /* I2CInit() */
+
 //
 // Test a specific I2C address to see if a device responds
 // returns 0 for no response, 1 for a response
@@ -1061,7 +1030,7 @@ int iDevice = DEVICE_UNKNOWN;
 
   // Check for Microchip 24AAXXXE64 family serial 2 Kbit EEPROM
   if (i >= 0x50 && i <= 0x57) {
-    unsigned int u32Temp = 0;
+    uint32_t u32Temp = 0;
     I2CReadRegister(pI2C, i, 0xf8, (unsigned char *)&u32Temp,
                     3); // check for Microchip's OUI
     if (u32Temp == 0x000004a3 || u32Temp == 0x00001ec0 ||
