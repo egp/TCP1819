@@ -42,24 +42,27 @@ const int iRPIPins[] = {-1,-1,-1,2,-1,3,-1,4,14,-1,
                         -1,6,12,13,-1,19,16,26,20,-1,
                         21};
 
-#else // Arduino?
+                        
+ #else // Arduino / ESP-IDF / generic host
 static unsigned char iSDAState = 1;
+
 #ifdef ARDUINO
+
 #include <Arduino.h>
 
-#ifndef __AVR_ATtiny85__
-#endif // !AVR
 #ifdef W600_EV
 #include <W600FastIO.h>
 #define VARIANT_MCK 80000000ul
 #endif // W600_EV
-#else // !ARDUINO
+
+#elif defined(ESP_PLATFORM)
+
 // ESP-IDF
-#if defined(ESP_PLATFORM)
+#include <stdint.h>
 #include "rom/ets_sys.h"
 #include "driver/i2c.h"
 #include "driver/gpio.h"
-#endif
+
 #define I2C_MASTER_NUM              0
 #define INPUT 0
 #define OUTPUT 1
@@ -69,47 +72,72 @@ static unsigned char iSDAState = 1;
 #define LOW 0
 #define HIGH 1
 
-void pinMode(int iPin, int iMode)
+static void pinMode(int iPin, int iMode)
 {
-  #if defined(ESP_PLATFORM)
     gpio_config_t io_conf = {};
 
     gpio_reset_pin((gpio_num_t)iPin);
     if (iMode == DISABLED) return;
-    io_conf.intr_type = GPIO_INTR_DISABLE; //disable interrupt
-    //bit mask of the pins that you want to set,e.g.GPIO18/19
+    io_conf.intr_type = GPIO_INTR_DISABLE; // disable interrupt
     io_conf.pin_bit_mask = (1ULL << iPin);
-    io_conf.pull_down_en = (gpio_pulldown_t)(iMode == INPUT_PULLDOWN); // pull-down mode
-    io_conf.pull_up_en = (gpio_pullup_t)(iMode == INPUT_PULLUP); // pull-up mode
-    if (iMode == OUTPUT) {
-        io_conf.mode = GPIO_MODE_OUTPUT;
-    } else { // must be input
-        io_conf.mode = GPIO_MODE_INPUT;
-    }
-    gpio_config(&io_conf); //configure GPIO with the given settings
-    #endif
-} /* pinMode() */
-
-void IRAM_ATTR delayMicroseconds(uint32_t us)
-{
-
-#if defined(ARDUINO_ARCH_ESP32)
-    ets_delay_us(us);
-#endif
-
+    io_conf.pull_down_en = (gpio_pulldown_t)(iMode == INPUT_PULLDOWN);
+    io_conf.pull_up_en = (gpio_pullup_t)(iMode == INPUT_PULLUP);
+    io_conf.mode = (iMode == OUTPUT) ? GPIO_MODE_OUTPUT : GPIO_MODE_INPUT;
+    gpio_config(&io_conf);
 }
 
-void digitalWrite(int iPin, int iValue)
+static void delayMicroseconds(uint32_t us)
+{
+    ets_delay_us(us);
+}
+
+static void digitalWrite(int iPin, int iValue)
 {
     gpio_set_level((gpio_num_t)iPin, iValue);
 }
 
-uint8_t digitalRead(int iPin)
+static uint8_t digitalRead(int iPin)
 {
     return (uint8_t)gpio_get_level((gpio_num_t)iPin);
 }
-#endif // ARDUINO
-#endif // _LINUX_
+
+#else // generic host build
+
+#include <stdint.h>
+
+#define INPUT 0
+#define OUTPUT 1
+#define INPUT_PULLUP 2
+#define INPUT_PULLDOWN 3
+#define DISABLED 4
+#define LOW 0
+#define HIGH 1
+
+static void pinMode(int iPin, int iMode)
+{
+    (void)iPin;
+    (void)iMode;
+}
+
+static void delayMicroseconds(uint32_t us)
+{
+    (void)us;
+}
+
+static void digitalWrite(int iPin, int iValue)
+{
+    (void)iPin;
+    (void)iValue;
+}
+
+static uint8_t digitalRead(int iPin)
+{
+    (void)iPin;
+    return 1;
+}
+
+#endif // platform split
+#endif // _LINUX_                       
 #include "TCP1819.h"
 
 static const char *szDeviceNames[] = {"Unknown","SSD1306","SH1106","VL53L0X","BMP180", "BMP280","BME280",
@@ -619,10 +647,14 @@ void I2CGetDeviceName(int iDevice, char *szName)
 // Pass the pin numbers used for SDA and SCL
 // as well as the clock rate in Hz
 //
-void I2CInit(BBI2C *pI2C, uint32_t iClock);
+//
+// Initialize the I2C BitBang library
+// Pass the pin numbers used for SDA and SCL
+// as well as the clock rate in Hz
+//
+void I2CInit(BBI2C *pI2C, uint32_t iClock)
 {
 #if defined(ESP_PLATFORM)
-
     // ESP-IDF
     i2c_config_t conf;
     conf.mode = I2C_MODE_MASTER;
@@ -635,7 +667,7 @@ void I2CInit(BBI2C *pI2C, uint32_t iClock);
     ESP_ERROR_CHECK(i2c_param_config(I2C_NUM_0, &conf));
     ESP_ERROR_CHECK(i2c_driver_install(I2C_NUM_0, I2C_MODE_MASTER, 0, 0, 0));
     return;
-#endif // !_LINUX_ && !ARDUINO
+#endif
 
 #ifdef _LINUX_
     if (gpioInitialise() < 0)
@@ -658,7 +690,7 @@ void I2CInit(BBI2C *pI2C, uint32_t iClock);
         w600DigitalWrite(pI2C->iSCL, LOW);
         w600PinMode(pI2C->iSDA, GPIO_INPUT); // let the lines float (tri-state)
         w600PinMode(pI2C->iSCL, GPIO_INPUT);
-#else // generic
+#else
         pinMode(pI2C->iSDA, OUTPUT);
         pinMode(pI2C->iSCL, OUTPUT);
         digitalWrite(pI2C->iSDA, LOW); // setting low = enabling as outputs
@@ -676,10 +708,8 @@ void I2CInit(BBI2C *pI2C, uint32_t iClock);
         gpioWrite(pI2C->iSDA, 0);
         gpioWrite(pI2C->iSCL, 0);
         gpioSetMode(pI2C->iSDA, PI_INPUT);
-        // gpioSetPullUpDown(pI2C->iSDA, PI_PUD_UP);
         gpioSetMode(pI2C->iSCL, PI_INPUT);
-        // gpioSetPullUpDown(pI2C->iSCL, PI_PUD_UP);
-#endif // _LINUX_
+#endif
     }
 
 #if defined(__AVR__) && !defined(ARDUINO_ARCH_MEGAAVR)
@@ -693,15 +723,13 @@ void I2CInit(BBI2C *pI2C, uint32_t iClock);
         *iPort_SDA_Out &= ~iSDABit; // digitalWrite SDA LOW
         *iPort_SCL_Out &= ~iSCLBit; // digitalWrite SCL LOW
     }
-#endif // __AVR__
+#endif
 
-    // For now, we only support 100K, 400K, 800K and 1MHz clock rates
-    // all other values default to a computed delay
 #ifdef _LINUX_
     {
         uint32_t delay = 1000000UL / iClock;
         if (delay < 1UL) delay = 1UL;
-        pI2C->iDelay = (uint16_t)delay;
+        pI2C->iDelay = delay;
     }
 #else
     if (iClock >= 1000000UL)
@@ -713,8 +741,8 @@ void I2CInit(BBI2C *pI2C, uint32_t iClock);
     else if (iClock >= 100000UL)
         pI2C->iDelay = 10;
     else
-        pI2C->iDelay = (uint16_t)(1000000UL / iClock);
-#endif // _LINUX_
+        pI2C->iDelay = (1000000UL / iClock);
+#endif
 } /* I2CInit() */
 
 //
@@ -723,47 +751,25 @@ void I2CInit(BBI2C *pI2C, uint32_t iClock);
 //
 unsigned char I2CTest(BBI2C *pI2C, unsigned char addr)
 {
-unsigned char response = 0;
+    unsigned char response = 0;
 
-  if (pI2C->bWire)
-  {
-#if !defined(ARDUINO) && !defined(_LINUX_)
-      i2c_cmd_handle_t cmd = i2c_cmd_link_create();
-      if (cmd == NULL) {
-         // ESP_LOGE("bb_epdiy", "insufficient memory for I2C transaction");
-      }
-      i2c_master_start(cmd);
-      i2c_master_write_byte(cmd, (addr << 1) | I2C_MASTER_WRITE, true);
-      i2c_master_stop(cmd);
-      esp_err_t ret = i2c_master_cmd_begin(I2C_NUM_0, cmd, 1000 / portTICK_PERIOD_MS);
-      i2c_cmd_link_delete(cmd);
-      return (ret == ESP_OK);
-#endif // ESP_IDF
-      
-#if defined(ARDUINO) && !defined( _LINUX_ ) && !defined( __AVR_ATtiny85__ )
-  // We use the return value of
-  // the Write.endTransmisstion to see if
-  // a device did acknowledge to the address.
-  pI2C->pWire->beginTransmission(addr);
-  response = !pI2C->pWire->endTransmission();
-#endif
 #ifdef _LINUX_
     if (ioctl(pI2C->file_i2c, I2C_SLAVE, addr) >= 0) {
-	    // probe this address
-	unsigned char ucTemp;
-	if (read(pI2C->file_i2c, &ucTemp, 1) >= 0)
-    	    response = 1;
+        unsigned char ucTemp;
+        if (read(pI2C->file_i2c, &ucTemp, 1) >= 0)
+            response = 1;
     }
-#endif
     return response;
-  }
-  if (i2cBegin(pI2C, addr, 0)) // try to write to the given address
-  {
-    response = 1;
-  }
-  i2cEnd(pI2C);
-  return response;
+#else
+    if (i2cBegin(pI2C, addr, 0)) // try to write to the given address
+    {
+        response = 1;
+    }
+    i2cEnd(pI2C);
+    return response;
+#endif
 } /* I2CTest() */
+
 //
 // Scans for I2C devices on the bus
 // returns a bitmap of devices which are present (128 bits = 16 bytes, LSB first)
@@ -787,154 +793,93 @@ void I2CScan(BBI2C *pI2C, unsigned char *pMap)
 // quits if a NACK is received and returns 0
 // otherwise returns the number of bytes written
 //
+
 int I2CWrite(BBI2C *pI2C, unsigned char iAddr, unsigned char *pData, int iLen)
 {
-  int rc = 0;
-  
-  if (pI2C->bWire)
-  {
-#if !defined(ARDUINO) && !defined(_LINUX_)
-      i2c_cmd_handle_t cmd = i2c_cmd_link_create();
-      if (cmd == NULL) {
-         // ESP_LOGE("bb_epdiy", "insufficient memory for I2C transaction");
-      }
-      i2c_master_start(cmd);
-      i2c_master_write_byte(cmd, (iAddr << 1) | I2C_MASTER_WRITE, true);
-      i2c_master_write(cmd, pData, iLen, true);
-      i2c_master_stop(cmd);
-      esp_err_t ret = i2c_master_cmd_begin(I2C_NUM_0, cmd, 1000 / portTICK_PERIOD_MS);
-      i2c_cmd_link_delete(cmd);
-      return (ret == ESP_OK);
-#endif // ESP_IDF
-#if defined(ARDUINO) && !defined ( _LINUX_ ) && !defined( __AVR_ATtiny85__ )
-    pI2C->pWire->beginTransmission(iAddr);
-    pI2C->pWire->write(pData, (unsigned char)iLen);
-    rc = !pI2C->pWire->endTransmission();
-#endif
+    int rc = 0;
+
 #ifdef _LINUX_
     if (ioctl(pI2C->file_i2c, I2C_SLAVE, iAddr) >= 0)
     {
-       if (write(pI2C->file_i2c, pData, iLen) >= 0)
-          rc = 1;
-    } 
-#endif // _LINUX_
+        if (write(pI2C->file_i2c, pData, iLen) >= 0)
+            rc = 1;
+    }
     return rc;
-  }
-  rc = i2cBegin(pI2C, iAddr, 0);
-  if (rc == 1) // slave sent ACK for its address
-  {
-     rc = i2cWrite(pI2C, pData, iLen);
-  }
-  i2cEnd(pI2C);
-  return rc; // returns the number of bytes sent or 0 for error
+#else
+    rc = i2cBegin(pI2C, iAddr, 0);
+    if (rc == 1) // slave sent ACK for its address
+    {
+        rc = i2cWrite(pI2C, pData, iLen);
+    }
+    i2cEnd(pI2C);
+    return rc; // returns the number of bytes sent or 0 for error
+#endif
 } /* I2CWrite() */
+
 //
 // Read N bytes starting at a specific I2C internal register
 // returns 1 for success, 0 for error
 //
+
+
 int I2CReadRegister(BBI2C *pI2C, unsigned char iAddr, unsigned char u8Register, unsigned char *pData, int iLen)
 {
-  int rc;
-  
-  if (pI2C->bWire) // use the wire library
-  {
-      int i = 0;
-#if !defined(ARDUINO) && !defined(_LINUX_)
-      I2CWrite(pI2C, iAddr, &u8Register, 1);
-      I2CRead(pI2C, iAddr, pData, iLen);
-      return iLen;
-#endif // ESP-IDF
-#if defined(ARDUINO) && !defined( _LINUX_ ) && !defined( __AVR_ATtiny85__ )
-      pI2C->pWire->beginTransmission(iAddr);
-      pI2C->pWire->write(u8Register);
-      pI2C->pWire->endTransmission();
-      pI2C->pWire->requestFrom(iAddr, (unsigned char)iLen);
-      while (i < iLen)
-      {
-          pData[i++] = pI2C->pWire->read();
-      }
-#endif
+    int rc;
+
 #ifdef _LINUX_
+    int i = 0;
     if (ioctl(pI2C->file_i2c, I2C_SLAVE, iAddr) >= 0)
     {
-       write(pI2C->file_i2c, &u8Register, 1);
-       i = read(pI2C->file_i2c, pData, iLen);
-    } 
-#endif // _LINUX_
-      return (i > 0);
-  }
-  rc = i2cBegin(pI2C, iAddr, 0); // start a write operation
-  if (rc == 1) // slave sent ACK for its address
-  {
-     rc = i2cWrite(pI2C, &u8Register, 1); // write the register we want to read from
-     if (rc == 1)
-     {
-       i2cEnd(pI2C);
-       rc = i2cBegin(pI2C, iAddr, 1); // start a read operation
-       if (rc == 1)
-       {
-         i2cRead(pI2C, pData, iLen);
-       }
-     }
-  }
-  i2cEnd(pI2C);
-  return rc; // returns 1 for success, 0 for error
+        write(pI2C->file_i2c, &u8Register, 1);
+        i = read(pI2C->file_i2c, pData, iLen);
+    }
+    return (i > 0);
+#else
+    rc = i2cBegin(pI2C, iAddr, 0); // start a write operation
+    if (rc == 1) // slave sent ACK for its address
+    {
+        rc = i2cWrite(pI2C, &u8Register, 1); // write the register we want to read from
+        if (rc == 1)
+        {
+            i2cEnd(pI2C);
+            rc = i2cBegin(pI2C, iAddr, 1); // start a read operation
+            if (rc == 1)
+            {
+                i2cRead(pI2C, pData, iLen);
+            }
+        }
+    }
+    i2cEnd(pI2C);
+    return rc; // returns 1 for success, 0 for error
+#endif
 } /* I2CReadRegister() */
+
 //
 // Read N bytes
 //
+
 int I2CRead(BBI2C *pI2C, unsigned char iAddr, unsigned char *pData, int iLen)
 {
-  int rc;
-  
-    if (pI2C->bWire) // use the wire library
-    {
-        int i = 0;
-#if !defined(ARDUINO) && !defined(_LINUX_)
-        esp_err_t ret;
-        i2c_cmd_handle_t cmd = i2c_cmd_link_create();
-        if (cmd == NULL) {
-           // ESP_LOGE("epdiy", "insufficient memory for I2C transaction");
-        }
-        i2c_master_start(cmd);
-        i2c_master_write_byte(cmd, (iAddr << 1) | I2C_MASTER_READ, true);
-        if (iLen > 1) {
-            i2c_master_read(cmd, pData, iLen - 1, I2C_MASTER_ACK);
-        }
-        i2c_master_read_byte(cmd, pData + iLen - 1, I2C_MASTER_NACK);
-        i2c_master_stop(cmd);
+    int rc;
 
-        ret = i2c_master_cmd_begin(I2C_NUM_0, cmd, 1000 / portTICK_PERIOD_MS);
-        if (ret == ESP_OK) {
-            i = iLen;
-        }
-        i2c_cmd_link_delete(cmd);
-        return iLen;
-#endif // ESP-IDF
-
-#if defined(ARDUINO) && !defined( _LINUX_ ) && !defined( __AVR_ATtiny85__ )
-        pI2C->pWire->requestFrom(iAddr, (unsigned char)iLen);
-        while (i < iLen)
-        {
-            pData[i++] = pI2C->pWire->read();
-        }
-#endif
 #ifdef _LINUX_
+    int i = 0;
     if (ioctl(pI2C->file_i2c, I2C_SLAVE, iAddr) >= 0)
     {
-       i = read(pI2C->file_i2c, pData, iLen);
-    } 
-#endif // _LINUX_
-        return (i > 0);
+        i = read(pI2C->file_i2c, pData, iLen);
     }
-  rc = i2cBegin(pI2C, iAddr, 1);
-  if (rc == 1) // slave sent ACK for its address
-  {
-     i2cRead(pI2C, pData, iLen);
-  }
-  i2cEnd(pI2C);
-  return rc; // returns 1 for success, 0 for error
+    return (i > 0);
+#else
+    rc = i2cBegin(pI2C, iAddr, 1);
+    if (rc == 1) // slave sent ACK for its address
+    {
+        i2cRead(pI2C, pData, iLen);
+    }
+    i2cEnd(pI2C);
+    return rc; // returns 1 for success, 0 for error
+#endif
 } /* I2CRead() */
+
 //
 // Figure out what device is at that address
 // returns the enumerated value

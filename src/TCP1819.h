@@ -20,7 +20,7 @@
 #ifndef __TCP1819_H__
 #define __TCP1819_H__
 
-#include <Wire.h>
+#include <stdint.h>
 
 
 // supported devices
@@ -116,11 +116,6 @@ int file_i2c;
 int iBus;
 #else
 #ifdef ARDUINO
-#ifdef DARDUINO_ARCH_MBED 
-
-#else
-
-#endif // MBED
 volatile uint32_t *pSDADDR, *pSDAPORT; // data direction and port register addr
 volatile uint32_t *pSCLDDR, *pSCLPORT;
 #endif // ARDUINO
