@@ -2,4 +2,13 @@
 # Syntax Coloring Map For TCP1819
 #######################################
 
-TCP1819	KEYWORD1
+BBI2C KEYWORD1
+
+I2CInit KEYWORD2
+I2CRead KEYWORD2
+I2CReadRegister KEYWORD2
+I2CWrite KEYWORD2
+I2CTest KEYWORD2
+I2CScan KEYWORD2
+I2CDiscoverDevice KEYWORD2
+I2CGetDeviceName KEYWORD2

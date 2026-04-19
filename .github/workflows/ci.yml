@@ -2,29 +2,64 @@ name: CI
 
 on:
   push:
+    branches:
+      - main
   pull_request:
   workflow_dispatch:
 
-permissions:
-  contents: read
-
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   host-build:
-    name: Host library build
     runs-on: ubuntu-latest
-
     steps:
-      - name: Check out repository
+      - name: Check out repo
         uses: actions/checkout@v4
 
-      - name: Show toolchain
-        run: |
-          c++ --version
-          make --version
+      - name: Show compiler
+        run: c++ --version
 
-      - name: Build host library
-        run: make clean lib
+      - name: Build host static library
+        run: |
+          make clean
+          make all
+
+  compile-examples:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        fqbn:
+          - arduino:avr:uno
+          - arduino:renesas_uno:minima
+          - arduino:renesas_uno:unor4wifi
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Install Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+        with:
+          version: 1.x
+
+      - name: Show Arduino CLI version
+        run: arduino-cli version
+
+      - name: Initialize Arduino CLI config
+        run: arduino-cli config init --overwrite
+
+      - name: Update core index
+        run: arduino-cli core update-index
+
+      - name: Install AVR core
+        run: arduino-cli core install arduino:avr
+
+      - name: Install Renesas Uno core
+        run: arduino-cli core install arduino:renesas_uno
+
+      - name: Compile I2C_Detector
+        run: |
+          arduino-cli compile \
+            --fqbn "${{ matrix.fqbn }}" \
+            --warnings all \
+            --library . \
+            examples/I2C_Detector
