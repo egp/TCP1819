@@ -45,7 +45,9 @@ const int iRPIPins[] = {-1,-1,-1,2,-1,3,-1,4,14,-1,
                         
  #else // Arduino / ESP-IDF / generic host
 static unsigned char iSDAState = 1;
-
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
 #ifdef ARDUINO
 
 #include <Arduino.h>
