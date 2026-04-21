@@ -2,17 +2,7 @@
 
 TCP1819 is a compact software-I2C library for caller-selected GPIO pins, with helper functions for bus scans and common-device identification.
 
-This repository is derived from the BitBank Bit Bang I2C library, but the current Arduino-facing API in this repo is centered on:
-
-- `BBI2C`
-- `I2CInit(...)`
-- `I2CRead(...)`
-- `I2CReadRegister(...)`
-- `I2CWrite(...)`
-- `I2CTest(...)`
-- `I2CScan(...)`
-- `I2CDiscoverDevice(...)`
-- `I2CGetDeviceName(...)`
+This repository is derived from the BitBank Bit Bang I2C library, but the current Arduino-facing API in this repo is centered on `BBI2C`, `I2CInit(...)`, `I2CRead(...)`, `I2CReadRegister(...)`, `I2CWrite(...)`, `I2CTest(...)`, `I2CScan(...)`, `I2CDiscoverDevice(...)`, and `I2CGetDeviceName(...)`.
 
 ## Scope
 
@@ -25,65 +15,36 @@ It provides:
 - bus scan and probe helpers
 - common-device identification helpers
 - Linux-oriented host support under `linux/`
+- host-test scripted-bus support under `extras/host_test/`
 
 It does not provide device-specific wrappers for higher-level sensors or displays. Those belong in libraries layered on top of TCP1819.
 
 ## Public API
 
-typedef struct mybbi2c
-{
-  unsigned char iSDA, iSCL;      // pin numbers
-  unsigned char bWire, bAlign;   // bWire retained in the struct layout
-  unsigned char iSDABit, iSCLBit;
-  uint32_t iDelay;
-  ...
-} BBI2C;
+The public API is built around the `BBI2C` struct plus these functions:
 
-int I2CRead(BBI2C *pI2C, uint8_t iAddr, uint8_t *pData, int iLen);
-int I2CReadRegister(BBI2C *pI2C, unsigned char iAddr, unsigned char u8Register, unsigned char *pData, int iLen);
-int I2CWrite(BBI2C *pI2C, unsigned char iAddr, unsigned char *pData, int iLen);
-uint8_t I2CTest(BBI2C *pI2C, unsigned char addr);
-void I2CScan(BBI2C *pI2C, unsigned char *pMap);
-void I2CInit(BBI2C *pI2C, uint32_t iClock);
-int I2CDiscoverDevice(BBI2C *pI2C, unsigned char iAddr, uint32_t *pCapabilities);
-void I2CGetDeviceName(int iDevice, char *szName);
+- `I2CInit(...)`
+- `I2CTest(...)`
+- `I2CRead(...)`
+- `I2CReadRegister(...)`
+- `I2CWrite(...)`
+- `I2CScan(...)`
+- `I2CDiscoverDevice(...)`
+- `I2CGetDeviceName(...)`
 
 ## Arduino usage
 
-Minimal setup:
+Typical Arduino use is:
 
-#include <string.h>
-#include <TCP1819.h>
+1. Zero-initialize a `BBI2C` instance.
+2. Set `bWire` to `0`.
+3. Set `iSDA` and `iSCL` to the caller-selected GPIO pins.
+4. Call `I2CInit(...)` with the desired bus clock.
+5. Use `I2CTest(...)`, `I2CRead(...)`, `I2CReadRegister(...)`, `I2CWrite(...)`, or `I2CScan(...)` as needed.
 
-namespace {
-static const uint8_t kSdaPin = 10;
-static const uint8_t kSclPin = 11;
-static const uint32_t kClockHz = 100000UL;
+For a simple presence test, call `I2CTest(...)` with the 7-bit device address.
 
-BBI2C i2c;
-}
-
-void setup() {
-  memset(&i2c, 0, sizeof(i2c));
-  i2c.bWire = 0;
-  i2c.iSDA = kSdaPin;
-  i2c.iSCL = kSclPin;
-  I2CInit(&i2c, kClockHz);
-}
-
-void loop() {
-}
-
-For a simple presence test:
-
-if (I2CTest(&i2c, 0x68)) {
-  // device responded at address 0x68
-}
-
-For a full scan:
-
-unsigned char map[16];
-I2CScan(&i2c, map);
+For a full scan, allocate a 16-byte map buffer and call `I2CScan(...)`.
 
 ## Example sketch
 
@@ -101,14 +62,27 @@ It:
 
 The `linux/` directory contains Linux-oriented host support and upstream-derived files used by the host build.
 
-The root `Makefile` builds a host static library:
+The root `Makefile` builds a host static library at `build/libTCP1819_host.a`.
 
-make clean
-make
+## Host-test scripted bus support
 
-Output:
+The `extras/host_test/` directory provides a TCP1819-owned scripted bus for host tests at the BBI2C interface level.
 
-build/libTCP1819_host.a
+It is intended for host-side unit tests that want to:
+
+- bind a `BBI2C` instance to a scripted bus
+- script `I2CTest`, `I2CRead`, and `I2CWrite` outcomes
+- inspect exact ordered bus traffic
+- reuse one common TCP1819-owned test seam across higher-level libraries
+
+The host tests live under `tests/host/`.
+
+See:
+
+- `extras/host_test/TCP1819ScriptedBus.h`
+- `extras/host_test/TCP1819ScriptedBus.cpp`
+- `extras/host_test/TCP1819HostShim.cpp`
+- `extras/host_test/README.txt`
 
 ## Device identification
 
@@ -126,17 +100,23 @@ This is intended as a convenience feature for diagnostics and detector sketches,
 - `src/` Arduino-facing public header and implementation
 - `examples/` Arduino example sketches
 - `linux/` Linux-oriented support code
-- `Makefile` host static-library build
+- `extras/host_test/` host-test scripted-bus support
+- `tests/host/` TCP1819-owned host tests
+- `docs/` design and implementation notes
+- `Makefile` host static-library build and host-test entry point
 - `library.properties` Arduino library metadata
 - `keywords.txt` Arduino IDE keyword highlighting
 
 ## CI
 
-The GitHub Actions workflow builds the host library and compiles the Arduino example sketch on:
+The GitHub Actions workflow:
 
-- Arduino Uno
-- Arduino Uno R4 Minima
-- Arduino Uno R4 WiFi
+- builds the host library
+- runs the host tests
+- compiles the Arduino example sketch on:
+  - Arduino Uno
+  - Arduino Uno R4 Minima
+  - Arduino Uno R4 WiFi
 
 ## License and attribution
 
