@@ -1,222 +1,335 @@
-ImplementationPlan_TCP1819_ScriptedBus.txt
+TCP1819 Scripted Bus Implementation Plan
+=======================================
 
 Goal
 ----
-Add a TCP1819-owned host-test scripted bus so TCP0532 and TCP9548 can remove their
-local fake transport code first, and future libraries such as TCP3231 can reuse the
-same bus-level test helper.
+Add a TCP1819-owned host-test scripted bus that operates at the BBI2C level and can
+be reused by any host test that calls TCP1819-style bus functions.
 
-What changed after reviewing current repos
-------------------------------------------
-1. Immediate migration targets are:
-   - TCP0532
-   - TCP9548
+This plan affects TCP1819 directly. It does not require any production Arduino
+behavior changes.
 
-2. Deferred targets are:
-   - TCP3231 (strong future fit once host tests are added)
-   - TCP0465 (current host tests are core/Wire-oriented, not TCP1819-bus-oriented)
-   - TCP1650 (current host tests intentionally exclude the Arduino/Wire adapter)
-   - TCP20x4 (current visible host tests are core/math focused, not TCP1819 bus tests)
-   - N2 (current host tests are controller/state-machine tests, not TCP1819 bus tests)
+Scope
+-----
+Provide a host-test helper plus host-only shim implementations that allow tests to:
+- bind a BBI2C instance to a scripted bus object
+- script probe/test, read, and write outcomes
+- observe exact bus traffic in chronological order
+- simulate short reads, short writes, and empty/failure-style results
+- support multiple independent BBI2C instances in one test process
 
-3. Therefore the TCP1819 helper should optimize first for:
-   - generic bus scripting
-   - queued reads
-   - recorded writes
-   - deterministic read/write/begin failures
-   - call-count and observation APIs
-   - enough flexibility to support interface adapters like TCP9548Transport
+Non-goals
+---------
+- no device-specific protocol helpers
+- no production-mode mocking
+- no Arduino build changes beyond keeping host-only code out of Arduino builds
+- no requirement to add convenience wrappers for every TCP1819 API on day one
 
-Core design rules
------------------
-1. TCP1819 owns the mock.
-2. The mock emulates the bus, not any device protocol.
-3. No production "mock mode" flag in runtime TCP1819 code.
-4. Host-test support lives outside normal Arduino library build paths.
-5. Client libraries can wrap the scripted bus in tiny local adapters if they expose
-   transport interfaces above raw BBI2C operations.
+Why this belongs in TCP1819
+---------------------------
+TCP1819 is the bus-layer dependency. A reusable host-test helper belongs here so that
+direct bus-level tests and thin adapters layered above BBI2C can share one consistent
+test seam.
 
-Recommended file layout in TCP1819
-----------------------------------
-Add a host-test support area outside src/, for example:
+The helper must match the real TCP1819 function contracts:
+- I2CInit(...) is void
+- I2CTest(...) returns an int-like success result
+- I2CRead(...) returns a byte count
+- I2CWrite(...) returns a byte count
 
-extras/host_test/
-  TCP1819ScriptedBus.h
-  TCP1819ScriptedBus.cpp
+That means the scripted bus must model counts, not just booleans.
 
-Optional later:
-extras/host_test/
-  TCP1819ScriptedBusAdapter.h
+Design rules
+------------
+1. Keep the helper host-only.
+   Put all scripted-bus code outside the normal production source path or guard it so
+   it is only part of host-test builds.
 
-Reason:
-- reusable by multiple TCP* repos
-- not pulled into normal Arduino builds
-- clean separation from production code
+2. Keep the helper bus-level.
+   The helper should know about BBI2C, addresses, bytes, lengths, and return counts.
+   It should not know about sensor frames, register maps, displays, clocks, or any
+   higher-level protocol semantics.
 
-Recommended abstraction
+3. Support both scripting and observation.
+   Tests need to inject results and also inspect exactly what traffic occurred.
+
+4. Preserve operation order.
+   Some WB tests need to assert read/write/test interleaving, not just totals.
+
+5. Support more than one bus.
+   Multiple BBI2C instances must be independently bindable in the same process.
+
+Recommended file layout
 -----------------------
-Prefer a small helper object, for example:
+Suggested host-test files under TCP1819:
 
-class TCP1819ScriptedBus
+- extras/host_test/TCP1819ScriptedBus.h
+- extras/host_test/TCP1819ScriptedBus.cpp
+- extras/host_test/TCP1819HostShim.cpp
+- extras/host_test/README.txt
 
-rather than global free-function state.
+The exact directory name can vary, but the intent is:
+- clearly host-test only
+- easy for downstream host builds to include and link
+- absent from Arduino library compilation
 
-Reasons:
-- multiple independent instances per test
-- less hidden global state
-- easier composition into transport adapters
+Core model
+----------
+A TCP1819ScriptedBus instance owns:
+- queued scripted results
+- accumulated observed operations
+- default behaviors used when no explicit script item is queued
 
-Required capabilities (Phase 1)
--------------------------------
-Lifecycle:
+A host-only binding registry maps:
+- BBI2C*  ->  TCP1819ScriptedBus*
+
+The host-only shim functions:
+- I2CInit
+- I2CTest
+- I2CRead
+- I2CWrite
+
+will:
+- look up the bound TCP1819ScriptedBus for the passed BBI2C*
+- record the operation
+- consume scripted results or defaults
+- return the correct count or value for the real API contract
+
+Recommended public helper API
+-----------------------------
+The exact names may vary, but Phase 1 should include equivalents of:
+
+Lifecycle / configuration
 - reset()
 - clearScript()
 - clearObservations()
+- setDefaultReadCount(int count)
+- setDefaultWriteCount(int count)
+- setDefaultTestResult(int result)
 
-Begin/init:
-- setBeginResult(bool)
+Binding
+- bind(BBI2C& bus, TCP1819ScriptedBus& scriptedBus)
+- unbind(BBI2C& bus)
+- unbindAll()      // optional but useful in test teardown
 
-Read scripting:
-- queueRead(bytes)
-- queueReadFailure()
-- optionally queueRead(address, bytes) for address-sensitive assertions
+Scripting
+- queueTestResult(int result)
+- queueReadBytes(const uint8_t* data, int returnedCount)
+- queueReadVector(const std::vector<uint8_t>& data, int returnedCount)
+- queueWriteCount(int returnedCount)
 
-Write behavior:
-- queueWriteResult(bool)      // FIFO, default true if desired
-- or setDefaultWriteResult(bool)
+Optional address-sensitive scripting, if wanted immediately:
+- queueTestResultForAddress(uint8_t address, int result)
+- queueReadForAddress(uint8_t address, bytes..., int returnedCount)
+- queueWriteCountForAddress(uint8_t address, int returnedCount)
 
-Observability:
-- beginCallCount()
+Observation
+- initCallCount()
+- testCallCount()
 - readCallCount()
 - writeCallCount()
-- writeCount()
-- writeAt(index) -> {address, bytes}
-- lastWriteAddress()
-- lastWriteBytes()
 
-Validation helpers:
-- hasPendingReads()
-- hasPendingWriteResults()
-- wasFullyConsumed()
+- lastInitClockHz()
+- lastTestAddress()
+- lastReadAddress()
+- lastWriteAddress()
+
+- writeHistoryCount()
+- writeBytesAt(size_t index)
+- readResultBytesAt(size_t index)
+
+Mixed ordered log
+- operationCount()
+- operationAt(size_t index)
+
+Consumption / status
+- hasPendingScript()
+- pendingReadCount()
+- pendingWriteCount()
+- pendingTestCount()
+- scriptFullyConsumed()
+
+Operation log shape
+-------------------
+Provide one chronological operation log with entries such as:
+
+enum class OpKind {
+  Init,
+  Test,
+  Read,
+  Write
+};
+
+struct Operation {
+  OpKind kind;
+  BBI2C* bus;
+  uint8_t address;
+
+  uint32_t initClockHz;          // valid for Init
+  int requestedLength;           // valid for Read/Write
+  int returnedCountOrResult;     // valid for Test/Read/Write
+
+  std::vector<uint8_t> bytes;    // written bytes for Write;
+                                 // returned bytes for Read
+};
+
+This log is the key feature that enables WB tests to assert exact ordering.
 
 Required semantics
 ------------------
-1. begin/init returns the scripted begin result.
-2. write(address, bytes) records exact address and exact bytes.
-3. write returns the next queued write result, or a default result if none queued.
-4. read(address, len) returns the next queued read buffer if its length matches.
-5. read fails if:
-   - explicit read failure was queued
-   - no read is queued
-   - requested length does not match queued data length
-   - optional address check fails
-6. observations remain available after calls so tests can inspect them.
+1. I2CInit
+   - record an Init operation
+   - store the passed clock for observation
+   - no failure path is needed in Phase 1 because the real API is void
 
-Important new requirement from TCP9548 review
----------------------------------------------
-The helper should support easy "write then read back" workflows without becoming
-device-specific.
+2. I2CTest
+   - record a Test operation with bus and address
+   - return the next queued test result, or the configured default
+   - allow explicit simulation of both success and failure
 
-Do NOT add a TCP9548-specific or PN532-specific API.
+3. I2CWrite
+   - record a Write operation with exact address, requested length, and written bytes
+   - return the next queued write count, or the configured default
+   - defaults should usually be "all bytes accepted" unless configured otherwise
+   - support short writes by allowing any returned count from 0..requestedLength
 
-Instead, support this pattern naturally:
-- queue a read result
-- perform a write
-- queue the verification read result
-- inspect the recorded write
+4. I2CRead
+   - record a Read operation with exact address and requested length
+   - consume the next queued read item, if any
+   - copy returnedCount bytes into the caller buffer
+   - return returnedCount
+   - support short reads by allowing returnedCount < requested length
+   - if no read is queued, use the configured default count behavior
 
-This is enough to replace FakeTCP9548Transport behavior such as:
-- read-only probe
-- write control byte then verify by readback
-- enable/disable channel by reading a mask, writing a changed mask, then reading again
+5. Default behavior
+   Suggested defaults:
+   - test default: success
+   - write default: requested length
+   - read default: 0 bytes returned
 
-Optional convenience layer (Phase 2)
-------------------------------------
-After Phase 1, consider a small generic adapter helper in TCP1819 for client libraries
-that define transport interfaces above the raw bus.
+   These defaults make missing script items visible while still being deterministic.
 
-Example use:
-- TCP9548 has a TCP9548Transport interface today
-- a tiny adapter can map that interface onto TCP1819ScriptedBus
-- this adapter should live in the client repo at first
-- only promote a generic adapter into TCP1819 if multiple repos need the same pattern
+6. Script persistence
+   Observations must remain queryable after script items are consumed.
 
-Do NOT put device-specific transport interfaces into TCP1819.
+7. Isolation
+   Traffic on one bound BBI2C instance must not affect another.
 
-Recommended first-wave migrations
----------------------------------
-Wave 1A: TCP0532
-- replace FakeTcp1819 with TCP1819ScriptedBus
-- keep TCP0532Transport adapter internal
-- bind adapter to the scripted bus in host tests
+Address-sensitive scripting
+---------------------------
+Address-sensitive queue items are optional in the initial slice, but recommended.
+They help catch wrong-address bugs earlier.
 
-Wave 1B: TCP9548
-- keep TCP9548Transport abstraction
-- replace FakeTCP9548Transport with a tiny adapter backed by TCP1819ScriptedBus
-- use scripted read queues and recorded writes to preserve current WB coverage
+If implemented in Phase 1, document deterministic mismatch behavior:
+- either fail the test immediately with a clear assertion
+- or record the mismatch and return a configurable failure result
 
-Deferred migrations
+Do not silently accept an address mismatch.
+
+Recommended helper behavior choices
+-----------------------------------
+1. Prefer vectors over raw pointers internally.
+2. Copy scripted read data into owned storage when queued.
+3. Record exact written bytes even when the scripted return count is short.
+4. Keep script and observation clearing separate.
+5. Make teardown easy:
+   reset() should leave the object in a fresh state.
+
+Phase 1 deliverables
+--------------------
+1. TCP1819ScriptedBus class with:
+   - queued test/read/write scripting
+   - ordered mixed operation log
+   - count and "last operation" observation helpers
+   - reset / clear APIs
+
+2. Host-only binding shim for:
+   - I2CInit
+   - I2CTest
+   - I2CRead
+   - I2CWrite
+
+3. TCP1819-owned host tests for:
+   - init logging
+   - test result scripting
+   - write count scripting and payload capture
+   - read count scripting and returned byte capture
+   - short write behavior
+   - short read behavior
+   - default behaviors when queues are empty
+   - ordered interleaving of mixed operations
+   - multiple bound bus isolation
+
+Phase 2 candidates
+------------------
+Only add these if a real consumer needs them:
+
+- host-only shim support for I2CReadRegister
+- host-only shim support for I2CScan
+- convenience helpers for exact expected sequences
+- stricter address-aware scripting and mismatch diagnostics
+- optional helpers to simplify common register-pointer write/read idioms
+
+Acceptance criteria
 -------------------
-TCP3231:
-- when host register-transaction tests are added, use TCP1819ScriptedBus directly
+The change is complete when TCP1819 provides:
 
-TCP0465:
-- revisit only if the Arduino-facing transport layer is refactored toward TCP1819-bus
-  tests instead of current core/Wire-oriented tests
-
-TCP1650:
-- not a current target; host tests intentionally stop below the Arduino/Wire layer
-
-TCP20x4:
-- not a current target for the existing visible tests; revisit only if a real TCP1819
-  bus-backed transport test layer is added
-
-N2:
-- not a direct target today; revisit only when hardware-facing seams are extracted into
-  host tests through TCP* libraries that use TCP1819
-
-Tests TCP1819 should own
-------------------------
-Add host tests in TCP1819 covering at least:
-
-1. reset clears script and observations
-2. begin returns scripted success
-3. begin returns scripted failure
-4. write records exact address and exact byte vector
-5. queued write failure is returned
-6. queued reads are returned FIFO
-7. read fails when queue is empty
-8. read fails on length mismatch
-9. optional address-checked read fails on wrong address
-10. observations expose correct counts and last write
-11. wasFullyConsumed() reports true only when no queued script remains
-
-Migration acceptance criteria
------------------------------
-The first milestone is complete when:
-- TCP1819 provides TCP1819ScriptedBus with the capabilities above
-- TCP0532 no longer contains FakeTcp1819 code
-- TCP9548 no longer contains FakeTCP9548Transport code
-- no device-specific logic was added to TCP1819
-- no production Arduino behavior changed
+1. A host-test scripted bus owned by TCP1819.
+2. Host-only shim implementations for the core BBI2C-level free functions:
+   - I2CInit
+   - I2CTest
+   - I2CRead
+   - I2CWrite
+3. Scripted support for:
+   - test/probe outcomes
+   - read byte buffers plus returned counts
+   - write returned counts
+4. Exact observation of:
+   - addresses
+   - requested lengths
+   - returned counts/results
+   - written bytes
+   - read-returned bytes
+   - mixed chronological operation order
+5. Correct isolation between multiple simultaneously bound BBI2C instances.
+6. No required production-library API changes.
+7. No device-specific logic added to TCP1819.
 
 Suggested implementation order
 ------------------------------
-Commit 1:
-- add TCP1819ScriptedBus skeleton and failing host tests in TCP1819
+Step 1
+Add failing TCP1819 host tests that define:
+- bind/unbind behavior
+- init/test/read/write routing
+- short count semantics
+- ordered operation logging
+- multi-bus isolation
 
-Commit 2:
-- make TCP1819ScriptedBus tests green
+Step 2
+Implement TCP1819ScriptedBus storage and scripting queues.
 
-Commit 3:
-- add brief host-test support README notes in TCP1819
+Step 3
+Implement the host-only shim functions and binding registry.
 
-Commit 4:
-- migrate TCP0532 host tests to TCP1819ScriptedBus
+Step 4
+Make the mixed operation log and helper accessors green.
 
-Commit 5:
-- migrate TCP9548 host tests to a tiny TCP9548Transport adapter backed by
-  TCP1819ScriptedBus
+Step 5
+Add a short README.txt showing:
+- how to bind a BBI2C
+- how to queue a read
+- how to queue a write count
+- how to inspect ordered traffic
 
-Commit 6:
-- remove local fake transport files from TCP0532 and TCP9548
+Step 6
+Defer any optional APIs such as I2CReadRegister or I2CScan until an actual host test
+needs them.
+
+Notes for future users
+----------------------
+This helper is intentionally low-level. Tests built on top of it should decide locally
+how much abstraction they want:
+- direct BBI2C-level tests can bind the bus and call TCP1819 functions directly
+- higher-level host tests can keep thin local adapters if that improves readability
+
+The TCP1819-owned asset is the reusable bus seam itself.
