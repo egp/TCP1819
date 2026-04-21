@@ -56,7 +56,12 @@ void TCP1819ScriptedBus::setDefaultWriteCount(int count)
 
 void TCP1819ScriptedBus::queueTestResult(int result)
 {
-    scriptedTestResults_.push_back(result);
+    scriptedTestResults_.push_back(AddressedResult{false, 0U, result});
+}
+
+void TCP1819ScriptedBus::queueTestResultForAddress(uint8_t address, int result)
+{
+    scriptedTestResults_.push_back(AddressedResult{true, address, result});
 }
 
 void TCP1819ScriptedBus::queueReadVector(const std::vector<uint8_t> &data, int returnedCount)
@@ -67,7 +72,20 @@ void TCP1819ScriptedBus::queueReadVector(const std::vector<uint8_t> &data, int r
     if (static_cast<std::size_t>(returnedCount) > data.size()) {
         throw std::invalid_argument("returned read count cannot exceed queued bytes");
     }
-    scriptedReads_.push_back(ReadScriptItem{data, returnedCount});
+    scriptedReads_.push_back(ReadScriptItem{false, 0U, data, returnedCount});
+}
+
+void TCP1819ScriptedBus::queueReadVectorForAddress(uint8_t address,
+                                                   const std::vector<uint8_t> &data,
+                                                   int returnedCount)
+{
+    if (returnedCount < 0) {
+        throw std::invalid_argument("returned read count must be non-negative");
+    }
+    if (static_cast<std::size_t>(returnedCount) > data.size()) {
+        throw std::invalid_argument("returned read count cannot exceed queued bytes");
+    }
+    scriptedReads_.push_back(ReadScriptItem{true, address, data, returnedCount});
 }
 
 void TCP1819ScriptedBus::queueWriteCount(int returnedCount)
@@ -75,7 +93,15 @@ void TCP1819ScriptedBus::queueWriteCount(int returnedCount)
     if (returnedCount < 0) {
         throw std::invalid_argument("returned write count must be non-negative");
     }
-    scriptedWriteCounts_.push_back(returnedCount);
+    scriptedWriteCounts_.push_back(AddressedResult{false, 0U, returnedCount});
+}
+
+void TCP1819ScriptedBus::queueWriteCountForAddress(uint8_t address, int returnedCount)
+{
+    if (returnedCount < 0) {
+        throw std::invalid_argument("returned write count must be non-negative");
+    }
+    scriptedWriteCounts_.push_back(AddressedResult{true, address, returnedCount});
 }
 
 std::size_t TCP1819ScriptedBus::initCallCount() const
@@ -174,7 +200,7 @@ void TCP1819ScriptedBus::handleInit(BBI2C *bus, uint32_t clockHz)
     recordOperation(TCP1819ScriptedBusOperation{
         TCP1819ScriptedBusOpKind::Init,
         bus,
-        0,
+        0U,
         clockHz,
         0,
         0,
@@ -184,15 +210,20 @@ void TCP1819ScriptedBus::handleInit(BBI2C *bus, uint32_t clockHz)
 
 int TCP1819ScriptedBus::handleTest(BBI2C *bus, uint8_t address)
 {
-    const int result = scriptedTestResults_.empty() ? defaultTestResult_ : scriptedTestResults_.front();
+    int result = defaultTestResult_;
     if (!scriptedTestResults_.empty()) {
-        scriptedTestResults_.pop_front();
+        const AddressedResult &scriptItem = scriptedTestResults_.front();
+        if (!scriptItem.hasAddress || scriptItem.address == address) {
+            result = scriptItem.value;
+            scriptedTestResults_.pop_front();
+        }
     }
+
     recordOperation(TCP1819ScriptedBusOperation{
         TCP1819ScriptedBusOpKind::Test,
         bus,
         address,
-        0,
+        0U,
         0,
         result,
         {},
@@ -206,33 +237,41 @@ int TCP1819ScriptedBus::handleRead(BBI2C *bus, uint8_t address, uint8_t *data, i
         throw std::invalid_argument("requested read length must be non-negative");
     }
 
-    std::vector<uint8_t> returnedBytes;
     int returnedCount = defaultReadCount_;
+    std::vector<uint8_t> returnedBytes;
 
     if (!scriptedReads_.empty()) {
-        const ReadScriptItem scriptItem = scriptedReads_.front();
-        scriptedReads_.pop_front();
-        returnedBytes.assign(scriptItem.bytes.begin(), scriptItem.bytes.begin() + scriptItem.returnedCount);
-        returnedCount = scriptItem.returnedCount;
-    } else {
-        returnedBytes.assign(static_cast<std::size_t>(returnedCount), 0U);
+        const ReadScriptItem &scriptItem = scriptedReads_.front();
+        if (!scriptItem.hasAddress || scriptItem.address == address) {
+            returnedCount = scriptItem.returnedCount;
+            returnedBytes.assign(scriptItem.bytes.begin(),
+                                 scriptItem.bytes.begin() + scriptItem.returnedCount);
+            scriptedReads_.pop_front();
+        }
     }
 
     returnedCount = std::min(returnedCount, requestedLength);
-    if (returnedCount > 0 && data != nullptr && !returnedBytes.empty()) {
-        std::copy(returnedBytes.begin(), returnedBytes.begin() + returnedCount, data);
-    }
-    if (returnedCount == 0) {
-        returnedBytes.clear();
-    } else if (static_cast<int>(returnedBytes.size()) > returnedCount) {
+
+    if (static_cast<int>(returnedBytes.size()) > returnedCount) {
         returnedBytes.resize(static_cast<std::size_t>(returnedCount));
+    }
+
+    if (returnedCount > 0) {
+        if (returnedBytes.empty()) {
+            returnedBytes.assign(static_cast<std::size_t>(returnedCount), 0U);
+        }
+        if (data != nullptr) {
+            std::copy(returnedBytes.begin(), returnedBytes.end(), data);
+        }
+    } else {
+        returnedBytes.clear();
     }
 
     recordOperation(TCP1819ScriptedBusOperation{
         TCP1819ScriptedBusOpKind::Read,
         bus,
         address,
-        0,
+        0U,
         requestedLength,
         returnedCount,
         returnedBytes,
@@ -246,16 +285,19 @@ int TCP1819ScriptedBus::handleWrite(BBI2C *bus, uint8_t address, const uint8_t *
         throw std::invalid_argument("requested write length must be non-negative");
     }
 
-    const int configuredCount = scriptedWriteCounts_.empty()
-                                    ? defaultWriteCount_
-                                    : scriptedWriteCounts_.front();
+    int configuredCount = defaultWriteCount_;
     if (!scriptedWriteCounts_.empty()) {
-        scriptedWriteCounts_.pop_front();
+        const AddressedResult &scriptItem = scriptedWriteCounts_.front();
+        if (!scriptItem.hasAddress || scriptItem.address == address) {
+            configuredCount = scriptItem.value;
+            scriptedWriteCounts_.pop_front();
+        }
     }
 
     const int returnedCount = (configuredCount == kDefaultRequestedLength)
                                   ? requestedLength
                                   : std::min(configuredCount, requestedLength);
+
     std::vector<uint8_t> writtenBytes;
     if (requestedLength > 0 && data != nullptr) {
         writtenBytes.assign(data, data + requestedLength);
@@ -265,7 +307,7 @@ int TCP1819ScriptedBus::handleWrite(BBI2C *bus, uint8_t address, const uint8_t *
         TCP1819ScriptedBusOpKind::Write,
         bus,
         address,
-        0,
+        0U,
         requestedLength,
         returnedCount,
         writtenBytes,

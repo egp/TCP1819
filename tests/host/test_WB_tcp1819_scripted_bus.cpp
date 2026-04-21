@@ -1,6 +1,5 @@
-#include <cassert>
 #include <cstdint>
-#include <cstring>
+#include <cstdlib>
 #include <iostream>
 #include <vector>
 
@@ -78,11 +77,107 @@ void testRoutesCoreOpsAndRecordsOrderedTraffic()
            "Read op should record returned bytes in order");
 }
 
-void testResetClearsScriptAndObservations()
+void testAddressAwareScriptsFallBackWithoutConsumptionOnMismatch()
 {
     TCP1819ScriptedBus::unbindAll();
 
     BBI2C bus = makeBus(12U, 13U);
+    TCP1819ScriptedBus scriptedBus;
+    TCP1819ScriptedBus::bind(bus, scriptedBus);
+
+    scriptedBus.setDefaultTestResult(9);
+    scriptedBus.setDefaultReadCount(0);
+    scriptedBus.setDefaultWriteCount(0);
+
+    scriptedBus.queueTestResultForAddress(0x68U, 1);
+    scriptedBus.queueReadVectorForAddress(0x68U, {0xABU}, 1);
+    scriptedBus.queueWriteCountForAddress(0x20U, 2);
+
+    uint8_t wrongRead = 0xEEU;
+    uint8_t wrongWrite[3] = {0x01U, 0x02U, 0x03U};
+
+    expect(I2CTest(&bus, 0x69U) == 9U, "wrong-address test should fall back to default result");
+    expect(scriptedBus.pendingTestCount() == 1U, "wrong-address test should not consume queued item");
+
+    expect(I2CRead(&bus, 0x69U, &wrongRead, 1) == 0, "wrong-address read should fall back to default count");
+    expect(wrongRead == 0xEEU, "wrong-address read should not touch caller buffer");
+    expect(scriptedBus.pendingReadCount() == 1U, "wrong-address read should not consume queued item");
+
+    expect(I2CWrite(&bus, 0x21U, wrongWrite, 3) == 0, "wrong-address write should fall back to default count");
+    expect(scriptedBus.pendingWriteCount() == 1U, "wrong-address write should not consume queued item");
+
+    uint8_t matchedRead = 0U;
+    expect(I2CTest(&bus, 0x68U) == 1U, "matching-address test should consume queued item");
+    expect(I2CRead(&bus, 0x68U, &matchedRead, 1) == 1, "matching-address read should consume queued item");
+    expect(matchedRead == 0xABU, "matching-address read should return queued byte");
+    expect(I2CWrite(&bus, 0x20U, wrongWrite, 3) == 2, "matching-address write should consume queued item");
+    expect(scriptedBus.scriptFullyConsumed(), "all address-aware items should now be consumed");
+
+    expect(scriptedBus.operationCount() == 6U, "all attempts should still be recorded");
+}
+
+void testReadRegisterUsesWriteThenReadSequence()
+{
+    TCP1819ScriptedBus::unbindAll();
+
+    BBI2C bus = makeBus(20U, 21U);
+    TCP1819ScriptedBus scriptedBus;
+    TCP1819ScriptedBus::bind(bus, scriptedBus);
+
+    scriptedBus.queueWriteCount(1);
+    scriptedBus.queueReadVector({0x12U, 0x34U}, 2);
+
+    unsigned char buffer[2] = {0U, 0U};
+    expect(I2CReadRegister(&bus, 0x68U, 0x0FU, buffer, 2) == 2,
+           "I2CReadRegister should return the read count on success");
+    expect(buffer[0] == 0x12U && buffer[1] == 0x34U,
+           "I2CReadRegister should copy read bytes into the caller buffer");
+    expect(scriptedBus.operationCount() == 2U, "I2CReadRegister should record one write and one read");
+
+    const TCP1819ScriptedBusOperation &writeOp = scriptedBus.operationAt(0U);
+    const TCP1819ScriptedBusOperation &readOp = scriptedBus.operationAt(1U);
+
+    expect(writeOp.kind == TCP1819ScriptedBusOpKind::Write, "first register-read op should be Write");
+    expect(writeOp.address == 0x68U, "register pointer write should target requested address");
+    expect(writeOp.requestedLength == 1, "register pointer write should be length 1");
+    expect(writeOp.returnedCountOrResult == 1, "register pointer write should report one byte written");
+    expect(writeOp.bytes == std::vector<uint8_t>({0x0FU}),
+           "register pointer write should contain the register byte");
+
+    expect(readOp.kind == TCP1819ScriptedBusOpKind::Read, "second register-read op should be Read");
+    expect(readOp.address == 0x68U, "register data read should target requested address");
+    expect(readOp.requestedLength == 2, "register data read should request the requested read length");
+    expect(readOp.returnedCountOrResult == 2, "register data read should report the queued count");
+    expect(readOp.bytes == std::vector<uint8_t>({0x12U, 0x34U}),
+           "register data read should record returned bytes");
+}
+
+void testReadRegisterAbortsWhenPointerWriteFails()
+{
+    TCP1819ScriptedBus::unbindAll();
+
+    BBI2C bus = makeBus(22U, 23U);
+    TCP1819ScriptedBus scriptedBus;
+    TCP1819ScriptedBus::bind(bus, scriptedBus);
+
+    scriptedBus.queueWriteCount(0);
+    scriptedBus.queueReadVector({0x99U}, 1);
+
+    unsigned char buffer[1] = {0x55U};
+    expect(I2CReadRegister(&bus, 0x68U, 0x01U, buffer, 1) == 0,
+           "I2CReadRegister should fail when the register pointer write fails");
+    expect(buffer[0] == 0x55U, "failed register read should leave caller buffer unchanged");
+    expect(scriptedBus.operationCount() == 1U, "failed register read should not attempt the data read");
+    expect(scriptedBus.pendingReadCount() == 1U, "failed register read should leave queued read untouched");
+    expect(scriptedBus.operationAt(0U).kind == TCP1819ScriptedBusOpKind::Write,
+           "failed register read should record only the pointer write");
+}
+
+void testResetClearsScriptAndObservations()
+{
+    TCP1819ScriptedBus::unbindAll();
+
+    BBI2C bus = makeBus(30U, 31U);
     TCP1819ScriptedBus scriptedBus;
     TCP1819ScriptedBus::bind(bus, scriptedBus);
 
@@ -145,6 +240,9 @@ void testMultipleBoundBusesStayIsolated()
 int main()
 {
     testRoutesCoreOpsAndRecordsOrderedTraffic();
+    testAddressAwareScriptsFallBackWithoutConsumptionOnMismatch();
+    testReadRegisterUsesWriteThenReadSequence();
+    testReadRegisterAbortsWhenPointerWriteFails();
     testResetClearsScriptAndObservations();
     testMultipleBoundBusesStayIsolated();
     std::cout << "test_WB_tcp1819_scripted_bus: PASS\n";

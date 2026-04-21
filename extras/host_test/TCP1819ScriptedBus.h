@@ -38,8 +38,13 @@ public:
     void setDefaultWriteCount(int count);
 
     void queueTestResult(int result);
+    void queueTestResultForAddress(uint8_t address, int result);
+
     void queueReadVector(const std::vector<uint8_t> &data, int returnedCount);
+    void queueReadVectorForAddress(uint8_t address, const std::vector<uint8_t> &data, int returnedCount);
+
     void queueWriteCount(int returnedCount);
+    void queueWriteCountForAddress(uint8_t address, int returnedCount);
 
     std::size_t initCallCount() const;
     std::size_t testCallCount() const;
@@ -66,7 +71,15 @@ public:
     int handleWrite(BBI2C *bus, uint8_t address, const uint8_t *data, int requestedLength);
 
 private:
+    struct AddressedResult {
+        bool hasAddress;
+        uint8_t address;
+        int value;
+    };
+
     struct ReadScriptItem {
+        bool hasAddress;
+        uint8_t address;
         std::vector<uint8_t> bytes;
         int returnedCount;
     };
@@ -78,8 +91,8 @@ private:
     int defaultTestResult_;
     int defaultReadCount_;
     int defaultWriteCount_;
-    std::deque<int> scriptedTestResults_;
+    std::deque<AddressedResult> scriptedTestResults_;
     std::deque<ReadScriptItem> scriptedReads_;
-    std::deque<int> scriptedWriteCounts_;
+    std::deque<AddressedResult> scriptedWriteCounts_;
     std::vector<TCP1819ScriptedBusOperation> operations_;
 };
