@@ -1,3 +1,4 @@
+// extras/host_test/TCP1819ScriptedBus.h v1
 #pragma once
 
 #include <cstddef>
@@ -51,6 +52,15 @@ public:
     std::size_t readCallCount() const;
     std::size_t writeCallCount() const;
 
+    uint32_t lastInitClockHz() const;
+    uint8_t lastTestAddress() const;
+    uint8_t lastReadAddress() const;
+    uint8_t lastWriteAddress() const;
+
+    std::size_t writeHistoryCount() const;
+    const std::vector<uint8_t> &writeBytesAt(std::size_t index) const;
+    const std::vector<uint8_t> &readResultBytesAt(std::size_t index) const;
+
     std::size_t operationCount() const;
     const TCP1819ScriptedBusOperation &operationAt(std::size_t index) const;
 
@@ -86,6 +96,10 @@ private:
 
     void recordOperation(const TCP1819ScriptedBusOperation &operation);
 
+    const TCP1819ScriptedBusOperation &lastOperationOfKind(TCP1819ScriptedBusOpKind kind) const;
+    const TCP1819ScriptedBusOperation &operationOfKindAt(TCP1819ScriptedBusOpKind kind,
+                                                         std::size_t index) const;
+
     static std::map<BBI2C *, TCP1819ScriptedBus *> &bindings();
 
     int defaultTestResult_;
@@ -96,3 +110,4 @@ private:
     std::deque<AddressedResult> scriptedWriteCounts_;
     std::vector<TCP1819ScriptedBusOperation> operations_;
 };
+// extras/host_test/TCP1819ScriptedBus.h v1

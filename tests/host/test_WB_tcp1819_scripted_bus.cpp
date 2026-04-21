@@ -1,7 +1,8 @@
-// tests/host/test_WB_tcp1819_scripted_bus.cpp v2
+// tests/host/test_WB_tcp1819_scripted_bus.cpp v3
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <stdexcept>
 #include <vector>
 
 #include "TCP1819.h"
@@ -23,6 +24,21 @@ void expect(bool condition, const char *message)
         std::cerr << "FAILED: " << message << '\n';
         std::abort();
     }
+}
+
+template <typename Fn>
+void expectOutOfRange(Fn fn, const char *message)
+{
+    try {
+        fn();
+    } catch (const std::out_of_range &) {
+        return;
+    } catch (...) {
+        std::cerr << "FAILED: " << message << " (wrong exception type)\n";
+        std::abort();
+    }
+    std::cerr << "FAILED: " << message << " (no exception)\n";
+    std::abort();
 }
 
 bool mapBitIsSet(const unsigned char *map, unsigned char address)
@@ -81,6 +97,66 @@ void testRoutesCoreOpsAndRecordsOrderedTraffic()
     expect(readOp.returnedCountOrResult == 3, "Read op should record returned count");
     expect(readOp.bytes == std::vector<uint8_t>({0xAAU, 0xBBU, 0xCCU}),
            "Read op should record returned bytes in order");
+}
+
+void testObservationHelpersExposeLastOpsAndSeparatedHistories()
+{
+    TCP1819ScriptedBus::unbindAll();
+
+    BBI2C bus = makeBus(40U, 41U);
+    TCP1819ScriptedBus scriptedBus;
+    TCP1819ScriptedBus::bind(bus, scriptedBus);
+
+    scriptedBus.queueTestResult(7);
+    scriptedBus.queueWriteCount(2);
+    scriptedBus.queueReadVector({0xA1U}, 1);
+    scriptedBus.queueWriteCount(1);
+    scriptedBus.queueReadVector({0xB2U, 0xB3U}, 2);
+
+    uint8_t firstWrite[3] = {0x10U, 0x11U, 0x12U};
+    uint8_t secondWrite[1] = {0x20U};
+    uint8_t firstRead[1] = {0U};
+    uint8_t secondRead[2] = {0U, 0U};
+
+    I2CInit(&bus, 400000UL);
+    expect(I2CTest(&bus, 0x33U) == 7U, "queued test result should be returned");
+    expect(I2CWrite(&bus, 0x20U, firstWrite, 3) == 2, "first queued write count should be used");
+    expect(I2CRead(&bus, 0x21U, firstRead, 1) == 1, "first queued read should be used");
+    expect(I2CWrite(&bus, 0x22U, secondWrite, 1) == 1, "second queued write count should be used");
+    expect(I2CRead(&bus, 0x23U, secondRead, 2) == 2, "second queued read should be used");
+
+    expect(scriptedBus.lastInitClockHz() == 400000UL, "last init clock helper should report the latest init");
+    expect(scriptedBus.lastTestAddress() == 0x33U, "last test address helper should report the latest test");
+    expect(scriptedBus.lastWriteAddress() == 0x22U, "last write address helper should report the latest write");
+    expect(scriptedBus.lastReadAddress() == 0x23U, "last read address helper should report the latest read");
+
+    expect(scriptedBus.writeHistoryCount() == 2U, "write history count should match the number of writes");
+    expect(scriptedBus.writeBytesAt(0U) == std::vector<uint8_t>({0x10U, 0x11U, 0x12U}),
+           "writeBytesAt(0) should return the first write payload");
+    expect(scriptedBus.writeBytesAt(1U) == std::vector<uint8_t>({0x20U}),
+           "writeBytesAt(1) should return the second write payload");
+    expect(scriptedBus.readResultBytesAt(0U) == std::vector<uint8_t>({0xA1U}),
+           "readResultBytesAt(0) should return the first read result bytes");
+    expect(scriptedBus.readResultBytesAt(1U) == std::vector<uint8_t>({0xB2U, 0xB3U}),
+           "readResultBytesAt(1) should return the second read result bytes");
+}
+
+void testObservationHelpersThrowWhenHistoryIsMissing()
+{
+    TCP1819ScriptedBus::unbindAll();
+
+    BBI2C bus = makeBus(42U, 43U);
+    TCP1819ScriptedBus scriptedBus;
+    TCP1819ScriptedBus::bind(bus, scriptedBus);
+
+    expectOutOfRange([&]() { (void)scriptedBus.lastInitClockHz(); },
+                     "lastInitClockHz should throw when no init has been recorded");
+    expectOutOfRange([&]() { (void)scriptedBus.lastTestAddress(); },
+                     "lastTestAddress should throw when no test has been recorded");
+    expectOutOfRange([&]() { (void)scriptedBus.writeBytesAt(0U); },
+                     "writeBytesAt should throw when no writes have been recorded");
+    expectOutOfRange([&]() { (void)scriptedBus.readResultBytesAt(0U); },
+                     "readResultBytesAt should throw when no reads have been recorded");
 }
 
 void testAddressAwareScriptsFallBackWithoutConsumptionOnMismatch()
@@ -306,6 +382,8 @@ void testMultipleBoundBusesStayIsolated()
 int main()
 {
     testRoutesCoreOpsAndRecordsOrderedTraffic();
+    testObservationHelpersExposeLastOpsAndSeparatedHistories();
+    testObservationHelpersThrowWhenHistoryIsMissing();
     testAddressAwareScriptsFallBackWithoutConsumptionOnMismatch();
     testReadRegisterUsesWriteThenReadSequenceAndReturnsSuccessFlag();
     testReadRegisterReturnsSuccessForShortPositiveRead();
@@ -317,4 +395,4 @@ int main()
     std::cout << "test_WB_tcp1819_scripted_bus: PASS\n";
     return 0;
 }
-// tests/host/test_WB_tcp1819_scripted_bus.cpp v2
+// tests/host/test_WB_tcp1819_scripted_bus.cpp v3

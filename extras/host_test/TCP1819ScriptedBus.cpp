@@ -1,3 +1,4 @@
+// extras/host_test/TCP1819ScriptedBus.cpp v1
 #include "TCP1819ScriptedBus.h"
 
 #include <algorithm>
@@ -134,6 +135,41 @@ std::size_t TCP1819ScriptedBus::writeCallCount() const
         operations_.begin(), operations_.end(), [](const TCP1819ScriptedBusOperation &operation) {
             return operation.kind == TCP1819ScriptedBusOpKind::Write;
         });
+}
+
+uint32_t TCP1819ScriptedBus::lastInitClockHz() const
+{
+    return lastOperationOfKind(TCP1819ScriptedBusOpKind::Init).initClockHz;
+}
+
+uint8_t TCP1819ScriptedBus::lastTestAddress() const
+{
+    return lastOperationOfKind(TCP1819ScriptedBusOpKind::Test).address;
+}
+
+uint8_t TCP1819ScriptedBus::lastReadAddress() const
+{
+    return lastOperationOfKind(TCP1819ScriptedBusOpKind::Read).address;
+}
+
+uint8_t TCP1819ScriptedBus::lastWriteAddress() const
+{
+    return lastOperationOfKind(TCP1819ScriptedBusOpKind::Write).address;
+}
+
+std::size_t TCP1819ScriptedBus::writeHistoryCount() const
+{
+    return writeCallCount();
+}
+
+const std::vector<uint8_t> &TCP1819ScriptedBus::writeBytesAt(std::size_t index) const
+{
+    return operationOfKindAt(TCP1819ScriptedBusOpKind::Write, index).bytes;
+}
+
+const std::vector<uint8_t> &TCP1819ScriptedBus::readResultBytesAt(std::size_t index) const
+{
+    return operationOfKindAt(TCP1819ScriptedBusOpKind::Read, index).bytes;
 }
 
 std::size_t TCP1819ScriptedBus::operationCount() const
@@ -320,8 +356,36 @@ void TCP1819ScriptedBus::recordOperation(const TCP1819ScriptedBusOperation &oper
     operations_.push_back(operation);
 }
 
+const TCP1819ScriptedBusOperation &TCP1819ScriptedBus::lastOperationOfKind(
+    TCP1819ScriptedBusOpKind kind) const
+{
+    for (auto it = operations_.rbegin(); it != operations_.rend(); ++it) {
+        if (it->kind == kind) {
+            return *it;
+        }
+    }
+    throw std::out_of_range("no recorded operation of requested kind");
+}
+
+const TCP1819ScriptedBusOperation &TCP1819ScriptedBus::operationOfKindAt(
+    TCP1819ScriptedBusOpKind kind,
+    std::size_t index) const
+{
+    std::size_t matchIndex = 0U;
+    for (const auto &operation : operations_) {
+        if (operation.kind == kind) {
+            if (matchIndex == index) {
+                return operation;
+            }
+            ++matchIndex;
+        }
+    }
+    throw std::out_of_range("operation history index out of range");
+}
+
 std::map<BBI2C *, TCP1819ScriptedBus *> &TCP1819ScriptedBus::bindings()
 {
     static std::map<BBI2C *, TCP1819ScriptedBus *> registry;
     return registry;
 }
+// extras/host_test/TCP1819ScriptedBus.cpp v1
