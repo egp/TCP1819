@@ -1,0 +1,222 @@
+ImplementationPlan_TCP1819_ScriptedBus.txt
+
+Goal
+----
+Add a TCP1819-owned host-test scripted bus so TCP0532 and TCP9548 can remove their
+local fake transport code first, and future libraries such as TCP3231 can reuse the
+same bus-level test helper.
+
+What changed after reviewing current repos
+------------------------------------------
+1. Immediate migration targets are:
+   - TCP0532
+   - TCP9548
+
+2. Deferred targets are:
+   - TCP3231 (strong future fit once host tests are added)
+   - TCP0465 (current host tests are core/Wire-oriented, not TCP1819-bus-oriented)
+   - TCP1650 (current host tests intentionally exclude the Arduino/Wire adapter)
+   - TCP20x4 (current visible host tests are core/math focused, not TCP1819 bus tests)
+   - N2 (current host tests are controller/state-machine tests, not TCP1819 bus tests)
+
+3. Therefore the TCP1819 helper should optimize first for:
+   - generic bus scripting
+   - queued reads
+   - recorded writes
+   - deterministic read/write/begin failures
+   - call-count and observation APIs
+   - enough flexibility to support interface adapters like TCP9548Transport
+
+Core design rules
+-----------------
+1. TCP1819 owns the mock.
+2. The mock emulates the bus, not any device protocol.
+3. No production "mock mode" flag in runtime TCP1819 code.
+4. Host-test support lives outside normal Arduino library build paths.
+5. Client libraries can wrap the scripted bus in tiny local adapters if they expose
+   transport interfaces above raw BBI2C operations.
+
+Recommended file layout in TCP1819
+----------------------------------
+Add a host-test support area outside src/, for example:
+
+extras/host_test/
+  TCP1819ScriptedBus.h
+  TCP1819ScriptedBus.cpp
+
+Optional later:
+extras/host_test/
+  TCP1819ScriptedBusAdapter.h
+
+Reason:
+- reusable by multiple TCP* repos
+- not pulled into normal Arduino builds
+- clean separation from production code
+
+Recommended abstraction
+-----------------------
+Prefer a small helper object, for example:
+
+class TCP1819ScriptedBus
+
+rather than global free-function state.
+
+Reasons:
+- multiple independent instances per test
+- less hidden global state
+- easier composition into transport adapters
+
+Required capabilities (Phase 1)
+-------------------------------
+Lifecycle:
+- reset()
+- clearScript()
+- clearObservations()
+
+Begin/init:
+- setBeginResult(bool)
+
+Read scripting:
+- queueRead(bytes)
+- queueReadFailure()
+- optionally queueRead(address, bytes) for address-sensitive assertions
+
+Write behavior:
+- queueWriteResult(bool)      // FIFO, default true if desired
+- or setDefaultWriteResult(bool)
+
+Observability:
+- beginCallCount()
+- readCallCount()
+- writeCallCount()
+- writeCount()
+- writeAt(index) -> {address, bytes}
+- lastWriteAddress()
+- lastWriteBytes()
+
+Validation helpers:
+- hasPendingReads()
+- hasPendingWriteResults()
+- wasFullyConsumed()
+
+Required semantics
+------------------
+1. begin/init returns the scripted begin result.
+2. write(address, bytes) records exact address and exact bytes.
+3. write returns the next queued write result, or a default result if none queued.
+4. read(address, len) returns the next queued read buffer if its length matches.
+5. read fails if:
+   - explicit read failure was queued
+   - no read is queued
+   - requested length does not match queued data length
+   - optional address check fails
+6. observations remain available after calls so tests can inspect them.
+
+Important new requirement from TCP9548 review
+---------------------------------------------
+The helper should support easy "write then read back" workflows without becoming
+device-specific.
+
+Do NOT add a TCP9548-specific or PN532-specific API.
+
+Instead, support this pattern naturally:
+- queue a read result
+- perform a write
+- queue the verification read result
+- inspect the recorded write
+
+This is enough to replace FakeTCP9548Transport behavior such as:
+- read-only probe
+- write control byte then verify by readback
+- enable/disable channel by reading a mask, writing a changed mask, then reading again
+
+Optional convenience layer (Phase 2)
+------------------------------------
+After Phase 1, consider a small generic adapter helper in TCP1819 for client libraries
+that define transport interfaces above the raw bus.
+
+Example use:
+- TCP9548 has a TCP9548Transport interface today
+- a tiny adapter can map that interface onto TCP1819ScriptedBus
+- this adapter should live in the client repo at first
+- only promote a generic adapter into TCP1819 if multiple repos need the same pattern
+
+Do NOT put device-specific transport interfaces into TCP1819.
+
+Recommended first-wave migrations
+---------------------------------
+Wave 1A: TCP0532
+- replace FakeTcp1819 with TCP1819ScriptedBus
+- keep TCP0532Transport adapter internal
+- bind adapter to the scripted bus in host tests
+
+Wave 1B: TCP9548
+- keep TCP9548Transport abstraction
+- replace FakeTCP9548Transport with a tiny adapter backed by TCP1819ScriptedBus
+- use scripted read queues and recorded writes to preserve current WB coverage
+
+Deferred migrations
+-------------------
+TCP3231:
+- when host register-transaction tests are added, use TCP1819ScriptedBus directly
+
+TCP0465:
+- revisit only if the Arduino-facing transport layer is refactored toward TCP1819-bus
+  tests instead of current core/Wire-oriented tests
+
+TCP1650:
+- not a current target; host tests intentionally stop below the Arduino/Wire layer
+
+TCP20x4:
+- not a current target for the existing visible tests; revisit only if a real TCP1819
+  bus-backed transport test layer is added
+
+N2:
+- not a direct target today; revisit only when hardware-facing seams are extracted into
+  host tests through TCP* libraries that use TCP1819
+
+Tests TCP1819 should own
+------------------------
+Add host tests in TCP1819 covering at least:
+
+1. reset clears script and observations
+2. begin returns scripted success
+3. begin returns scripted failure
+4. write records exact address and exact byte vector
+5. queued write failure is returned
+6. queued reads are returned FIFO
+7. read fails when queue is empty
+8. read fails on length mismatch
+9. optional address-checked read fails on wrong address
+10. observations expose correct counts and last write
+11. wasFullyConsumed() reports true only when no queued script remains
+
+Migration acceptance criteria
+-----------------------------
+The first milestone is complete when:
+- TCP1819 provides TCP1819ScriptedBus with the capabilities above
+- TCP0532 no longer contains FakeTcp1819 code
+- TCP9548 no longer contains FakeTCP9548Transport code
+- no device-specific logic was added to TCP1819
+- no production Arduino behavior changed
+
+Suggested implementation order
+------------------------------
+Commit 1:
+- add TCP1819ScriptedBus skeleton and failing host tests in TCP1819
+
+Commit 2:
+- make TCP1819ScriptedBus tests green
+
+Commit 3:
+- add brief host-test support README notes in TCP1819
+
+Commit 4:
+- migrate TCP0532 host tests to TCP1819ScriptedBus
+
+Commit 5:
+- migrate TCP9548 host tests to a tiny TCP9548Transport adapter backed by
+  TCP1819ScriptedBus
+
+Commit 6:
+- remove local fake transport files from TCP0532 and TCP9548
