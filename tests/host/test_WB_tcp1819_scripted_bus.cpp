@@ -1,4 +1,4 @@
-// tests/host/test_WB_tcp1819_scripted_bus.cpp v1
+// tests/host/test_WB_tcp1819_scripted_bus.cpp v2
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -122,7 +122,7 @@ void testAddressAwareScriptsFallBackWithoutConsumptionOnMismatch()
     expect(scriptedBus.operationCount() == 6U, "all attempts should still be recorded");
 }
 
-void testReadRegisterUsesWriteThenReadSequence()
+void testReadRegisterUsesWriteThenReadSequenceAndReturnsSuccessFlag()
 {
     TCP1819ScriptedBus::unbindAll();
 
@@ -134,8 +134,8 @@ void testReadRegisterUsesWriteThenReadSequence()
     scriptedBus.queueReadVector({0x12U, 0x34U}, 2);
 
     unsigned char buffer[2] = {0U, 0U};
-    expect(I2CReadRegister(&bus, 0x68U, 0x0FU, buffer, 2) == 2,
-           "I2CReadRegister should return the read count on success");
+    expect(I2CReadRegister(&bus, 0x68U, 0x0FU, buffer, 2) == 1,
+           "I2CReadRegister should return 1 on success");
     expect(buffer[0] == 0x12U && buffer[1] == 0x34U,
            "I2CReadRegister should copy read bytes into the caller buffer");
     expect(scriptedBus.operationCount() == 2U, "I2CReadRegister should record one write and one read");
@@ -153,9 +153,27 @@ void testReadRegisterUsesWriteThenReadSequence()
     expect(readOp.kind == TCP1819ScriptedBusOpKind::Read, "second register-read op should be Read");
     expect(readOp.address == 0x68U, "register data read should target requested address");
     expect(readOp.requestedLength == 2, "register data read should request the requested read length");
-    expect(readOp.returnedCountOrResult == 2, "register data read should report the queued count");
+    expect(readOp.returnedCountOrResult == 2, "register data read should still record the queued count");
     expect(readOp.bytes == std::vector<uint8_t>({0x12U, 0x34U}),
            "register data read should record returned bytes");
+}
+
+void testReadRegisterReturnsSuccessForShortPositiveRead()
+{
+    TCP1819ScriptedBus::unbindAll();
+
+    BBI2C bus = makeBus(26U, 27U);
+    TCP1819ScriptedBus scriptedBus;
+    TCP1819ScriptedBus::bind(bus, scriptedBus);
+
+    scriptedBus.queueWriteCount(1);
+    scriptedBus.queueReadVector({0x77U}, 1);
+
+    unsigned char buffer[2] = {0U, 0U};
+    expect(I2CReadRegister(&bus, 0x68U, 0x02U, buffer, 2) == 1,
+           "I2CReadRegister should return success when the read count is positive");
+    expect(buffer[0] == 0x77U, "short successful register read should still copy returned data");
+    expect(scriptedBus.operationCount() == 2U, "short successful register read should still perform write+read");
 }
 
 void testReadRegisterAbortsWhenPointerWriteFails()
@@ -177,6 +195,24 @@ void testReadRegisterAbortsWhenPointerWriteFails()
     expect(scriptedBus.pendingReadCount() == 1U, "failed register read should leave queued read untouched");
     expect(scriptedBus.operationAt(0U).kind == TCP1819ScriptedBusOpKind::Write,
            "failed register read should record only the pointer write");
+}
+
+void testReadRegisterFailsWhenReadReturnsZero()
+{
+    TCP1819ScriptedBus::unbindAll();
+
+    BBI2C bus = makeBus(28U, 29U);
+    TCP1819ScriptedBus scriptedBus;
+    TCP1819ScriptedBus::bind(bus, scriptedBus);
+
+    scriptedBus.queueWriteCount(1);
+    scriptedBus.queueReadVector({}, 0);
+
+    unsigned char buffer[1] = {0x44U};
+    expect(I2CReadRegister(&bus, 0x68U, 0x03U, buffer, 1) == 0,
+           "I2CReadRegister should fail when the data read returns zero");
+    expect(buffer[0] == 0x44U, "zero-length register read should leave caller buffer unchanged");
+    expect(scriptedBus.operationCount() == 2U, "zero-length register read should still record write+read");
 }
 
 void testScanBuildsBitmapFromTestResponses()
@@ -271,12 +307,14 @@ int main()
 {
     testRoutesCoreOpsAndRecordsOrderedTraffic();
     testAddressAwareScriptsFallBackWithoutConsumptionOnMismatch();
-    testReadRegisterUsesWriteThenReadSequence();
+    testReadRegisterUsesWriteThenReadSequenceAndReturnsSuccessFlag();
+    testReadRegisterReturnsSuccessForShortPositiveRead();
     testReadRegisterAbortsWhenPointerWriteFails();
+    testReadRegisterFailsWhenReadReturnsZero();
     testScanBuildsBitmapFromTestResponses();
     testResetClearsScriptAndObservations();
     testMultipleBoundBusesStayIsolated();
     std::cout << "test_WB_tcp1819_scripted_bus: PASS\n";
     return 0;
 }
-// tests/host/test_WB_tcp1819_scripted_bus.cpp v1
+// tests/host/test_WB_tcp1819_scripted_bus.cpp v2
