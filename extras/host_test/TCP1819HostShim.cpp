@@ -1,3 +1,4 @@
+// extras/host_test/TCP1819HostShim.cpp v1
 #include "TCP1819ScriptedBus.h"
 
 #include <cstddef>
@@ -66,10 +67,17 @@ int I2CReadRegister(BBI2C *pI2C,
     return I2CRead(pI2C, iAddr, pData, iLen);
 }
 
-void I2CScan(BBI2C *, unsigned char *pMap)
+void I2CScan(BBI2C *pI2C, unsigned char *pMap)
 {
-    if (pMap != nullptr) {
-        std::memset(pMap, 0, 16U);
+    if (pMap == nullptr) {
+        return;
+    }
+
+    std::memset(pMap, 0, 16U);
+    for (unsigned int i = 1; i < 128; ++i) {
+        if (I2CTest(pI2C, static_cast<unsigned char>(i)) != 0U) {
+            pMap[i >> 3] |= static_cast<unsigned char>(1U << (i & 7U));
+        }
     }
 }
 
@@ -84,3 +92,4 @@ void I2CGetDeviceName(int, char *szName)
         szName[0] = '\0';
     }
 }
+// extras/host_test/TCP1819HostShim.cpp v1

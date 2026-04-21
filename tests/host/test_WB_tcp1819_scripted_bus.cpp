@@ -1,3 +1,4 @@
+// tests/host/test_WB_tcp1819_scripted_bus.cpp v1
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -22,6 +23,11 @@ void expect(bool condition, const char *message)
         std::cerr << "FAILED: " << message << '\n';
         std::abort();
     }
+}
+
+bool mapBitIsSet(const unsigned char *map, unsigned char address)
+{
+    return (map[address >> 3] & static_cast<unsigned char>(1U << (address & 7U))) != 0U;
 }
 
 void testRoutesCoreOpsAndRecordsOrderedTraffic()
@@ -173,6 +179,30 @@ void testReadRegisterAbortsWhenPointerWriteFails()
            "failed register read should record only the pointer write");
 }
 
+void testScanBuildsBitmapFromTestResponses()
+{
+    TCP1819ScriptedBus::unbindAll();
+
+    BBI2C bus = makeBus(24U, 25U);
+    TCP1819ScriptedBus scriptedBus;
+    TCP1819ScriptedBus::bind(bus, scriptedBus);
+
+    scriptedBus.setDefaultTestResult(0);
+    scriptedBus.queueTestResultForAddress(0x10U, 1);
+    scriptedBus.queueTestResultForAddress(0x68U, 1);
+
+    unsigned char map[16];
+    I2CScan(&bus, map);
+
+    expect(mapBitIsSet(map, 0x10U), "scan bitmap should contain address 0x10");
+    expect(mapBitIsSet(map, 0x68U), "scan bitmap should contain address 0x68");
+    expect(!mapBitIsSet(map, 0x11U), "scan bitmap should not contain unmatched address 0x11");
+    expect(!mapBitIsSet(map, 0x67U), "scan bitmap should not contain unmatched address 0x67");
+    expect(scriptedBus.testCallCount() == 127U, "scan should test every address from 1 through 127");
+    expect(scriptedBus.operationCount() == 127U, "scan should record one Test op per address");
+    expect(scriptedBus.scriptFullyConsumed(), "scan should consume matching queued test results in order");
+}
+
 void testResetClearsScriptAndObservations()
 {
     TCP1819ScriptedBus::unbindAll();
@@ -243,8 +273,10 @@ int main()
     testAddressAwareScriptsFallBackWithoutConsumptionOnMismatch();
     testReadRegisterUsesWriteThenReadSequence();
     testReadRegisterAbortsWhenPointerWriteFails();
+    testScanBuildsBitmapFromTestResponses();
     testResetClearsScriptAndObservations();
     testMultipleBoundBusesStayIsolated();
     std::cout << "test_WB_tcp1819_scripted_bus: PASS\n";
     return 0;
 }
+// tests/host/test_WB_tcp1819_scripted_bus.cpp v1
